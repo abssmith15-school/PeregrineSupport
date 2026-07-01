@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import json
+
+# -----------------------------
+# Read JSON metadata from stdin
+# -----------------------------
+input = json.load(sys.stdin)
+
+import numpy
+import matplotlib
+matplotlib.use('pdf')
+import matplotlib.pyplot as plt
+
+# -----------------------------
+# User / default settings
+# -----------------------------
+climit = [30, 90]              # power in dB
+title  = input.get('title', '2D Childs Bay Slice')
+
+tenlog = 0                     # power is ALREADY in dB
+what_to_plot = None
+how_to_collapse_over_frequency = 'incoherent_mean'
+raw = False
+rlimit = None
+zlimit = None
+write_png_instead = False
+
+# -----------------------------
+# Parse CLI args
+# -----------------------------
+for key, value in zip(sys.argv[1::2], sys.argv[2::2]):
+    if key == 'title': title = value
+    if key == 'climit': climit = [float(x) for x in value.split(',', 1)]
+    if key in ('rlimit', 'xlimit'): rlimit = [float(x) for x in value.split(',', 1)]
+    if key in ('zlimit', 'ylimit'): zlimit = [float(x) for x in value.split(',', 1)]
+    if key == 'what_to_plot': what_to_plot = value
+    if key == 'png': write_png_instead = True
+    if key == 'raw': raw = True
+
+# -----------------------------
+# Choose field to plot
+# -----------------------------
+if not what_to_plot:
+    if 'power' in input:
+        what_to_plot = 'power'
+    elif 'pressure' in input:
+        what_to_plot = 'pressure'
+    else:
+        raise RuntimeError('No plottable field found')
+
+# -----------------------------
+# Load data via memmap
+# -----------------------------
+field = input[what_to_plot]
+
+value = numpy.memmap(
+    field['path'],
+    mode='r',
+    offset=field.get('offset', field.get('data_offset_in_file', 0)),
+    dtype=numpy.dtype(field['dtype']),
+    shape=tuple(field['shape'])
+)
+
+dimnames = list(field['dimnames'])
+
+# -----------------------------
+# Handle complex data
+# -----------------------------
+if numpy.iscomplexobj(value):
+    value = value.real * value.real + value.imag * value.imag
+
+# -----------------------------
+# Collapse extra dimensions
+# -----------------------------
+for label in ['F', 'G', 'V', 'S', 'B']:
+    if label in dimnames:
+        idim = dimnames.index(label)
+        value = numpy.mean(value, axis=idim)
+        dimnames.remove(label)
+
+# -----------------------------
+# Ensure R x Z
+# -----------------------------
+if dimnames != ['R', 'Z']:
+    raise RuntimeError(f'Expected R,Z but got {dimnames}')
+
+# -----------------------------
+# Extents (meters → km)
+# -----------------------------
+rextent = numpy.asarray(
+    field.get('range_limits', input['range_limits']),
+    dtype=float
+) / 1e3
+
+zextent = numpy.asarray(
+    input['depth_limits'],
+    dtype=float
+)
+zextent = numpy.abs(zextent) / 1e3   # positive-down, km
+
+r_unit = 'km'
+z_unit = 'km'
+
+# -----------------------------
+# Plot
+# -----------------------------
+fig, ax = plt.subplots(dpi=300)
+
+pos = ax.imshow(
+    value.T,
+    extent=[rextent[0], rextent[1], zextent[0], zextent[1]],
+    origin='upper',
+    aspect='auto',
+    cmap='turbo',
+    vmin=climit[0],
+    vmax=climit[1]
+)
+
+# -----------------------------
+# Bathymetry overlay
+# -----------------------------
+if 'bathymetry' in input:
+    bathy = numpy.memmap(
+        input['bathymetry']['path'],
+        mode='r',
+        dtype=numpy.dtype(input['bathymetry']['dtype']),
+        shape=tuple(input['bathymetry']['shape'])
+    )
+
+    r = numpy.linspace(rextent[0], rextent[1], bathy.size)
+    z_bathy = bathy / 1e3     # km, positive-down
+
+    ax.plot(r, z_bathy, 'k', linewidth=1.5)
+    ax.fill_between(r, z_bathy, zextent[1], color='k')
+
+    zmax = max(zextent[1], numpy.max(z_bathy))
+    ax.set_ylim(0, zmax)
+
+# -----------------------------
+# Labels & colorbar
+# -----------------------------
+ax.set_xlabel(f'Range ({r_unit})')
+ax.set_ylabel(f'Depth ({z_unit})')
+ax.set_title(title)
+
+fig.colorbar(pos, ax=ax, label='Power (dB)')
+
+# -----------------------------
+# Save output
+# -----------------------------
+if write_png_instead:
+    if sys.stdout.isatty():
+        fig.savefig('/tmp/out.png', bbox_inches='tight')
+        os.system('open /tmp/out.png')
+    else:
+        plt.imsave(sys.stdout.buffer, value.T)
+else:
+    if sys.stdout.isatty():
+        fig.savefig('/tmp/out.pdf', bbox_inches='tight')
+        os.system('open /tmp/out.pdf 2>/dev/null')
+    else:
+        fig.savefig(sys.stdout.buffer, bbox_inches='tight')
