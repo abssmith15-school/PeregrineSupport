@@ -5,7 +5,7 @@ close all
 % INPUTS
 %% ------------------------------------------------------------------------
 
-ncfile = 'C:\Users\abiga\Downloads\GEBCO_01_Jul_2026_587676abc18e\gebco_2026_n41.262_s41.0821_w9.6266_e9.8652.nc';
+ncfile = 'C:\Users\abiga\Downloads\GEBCO_01_Jul_2026_9709b50e0487\gebco_2026_n41.352_s40.9922_w9.5073_e9.985.nc';
 
 lat0 = 41.1719;
 lon0 = 9.7459;
